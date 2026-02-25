@@ -1,5 +1,4 @@
 ﻿using GigeVision.Core.Enums;
-using Stira.WpfCore;
 using System;
 using System.Net;
 using System.Net.Sockets;
@@ -16,6 +15,7 @@ namespace GigeVision.Core.Services
     public abstract class StreamReceiverBase : BaseNotifyPropertyChanged, IStreamReceiver
     {
         protected Socket socketRxRaw;
+        private DateTime lastFirewallPunchKeepAliveSent;
 
         /// <summary>
         /// Receives the GigeStream
@@ -24,7 +24,19 @@ namespace GigeVision.Core.Services
         {
             GvspInfo = new GvspInfo();
             MissingPacketTolerance = 2;
+            ReceiveTimeoutInMilliseconds = 1000;
+            FirewallPunchKeepAliveIntervalInSeconds = 30;
         }
+
+        /// <summary>
+        /// The socket receive timeout in milliseconds. Set -1 to infinite timeout
+        /// </summary>
+        public int ReceiveTimeoutInMilliseconds { get; set; }
+
+        /// <summary>
+        /// Time interval from a package to another for firewall traversal. Set value <= 0 to disable it
+        /// </summary>
+        public int FirewallPunchKeepAliveIntervalInSeconds { get; set; }
 
         /// <summary>
         /// Event for frame ready
@@ -35,6 +47,16 @@ namespace GigeVision.Core.Services
         /// GVSP info for image info
         /// </summary>
         public GvspInfo GvspInfo { get; protected set; }
+
+        /// <summary>
+        /// The interval for sending to the camera a package to keep the route opened through the firewall
+        /// </summary>
+        public string CameraIP { get; set; }
+
+        /// <summary>
+        /// The camera source traffic port. Required for firewall traversal traffic
+        /// </summary>
+        public int CameraSourcePort { get; set; }
 
         /// <summary>
         /// Is multicast enabled
@@ -131,7 +153,7 @@ namespace GigeVision.Core.Services
 
             if (GvspInfo.Width > 0 && GvspInfo.Height > 0) //Now we can calculate the final packet ID
             {
-                var totalBytesExpectedForOneFrame = GvspInfo.Width * GvspInfo.Height;
+                var totalBytesExpectedForOneFrame = GvspInfo.Width * GvspInfo.Height * GvspInfo.BytesPerPixel;
                 GvspInfo.FinalPacketID = totalBytesExpectedForOneFrame / GvspInfo.PayloadSize;
                 if (totalBytesExpectedForOneFrame % GvspInfo.PayloadSize != 0)
                 {
@@ -190,6 +212,12 @@ namespace GigeVision.Core.Services
                         packetRxCount = 0;
                         lastImageID = imageID;
 
+                        if (DateTime.Now.Subtract(lastFirewallPunchKeepAliveSent).Seconds >= FirewallPunchKeepAliveIntervalInSeconds && FirewallPunchKeepAliveIntervalInSeconds > 0)
+                        {
+                            lastFirewallPunchKeepAliveSent = DateTime.Now;
+                            socketRxRaw.SendTo(new byte[8], new IPEndPoint(IPAddress.Parse(CameraIP), CameraSourcePort));
+                        }
+
                         Task.Run(() =>
                         {
                             //Checking if we receive all packets
@@ -237,12 +265,16 @@ namespace GigeVision.Core.Services
                 }
                 socketRxRaw = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
                 socketRxRaw.Bind(new IPEndPoint(IPAddress.Any, PortRx));
+                socketRxRaw.ReceiveTimeout = ReceiveTimeoutInMilliseconds;
+
+                socketRxRaw.SendTo(new byte[8], new IPEndPoint(IPAddress.Parse(CameraIP), CameraSourcePort));
+                lastFirewallPunchKeepAliveSent = DateTime.Now;
+
                 if (IsMulticast)
                 {
                     MulticastOption mcastOption = new(IPAddress.Parse(MulticastIP), IPAddress.Parse(RxIP));
                     socketRxRaw.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership, mcastOption);
                 }
-                socketRxRaw.ReceiveTimeout = 1000;
                 //One full hd image with GVSP2.0 Header as default, it will be updated for image type
                 socketRxRaw.ReceiveBufferSize = (int)(1920 * 1100);
             }

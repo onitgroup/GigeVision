@@ -1,12 +1,14 @@
 ﻿using GigeVision.Core.Enums;
 using GigeVision.Core.Interfaces;
-using Stira.WpfCore;
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Tasks;
+using GenICam;
 using GigeVision.Core.Models;
+using Converter = GigeVision.Core.Models.Converter;
 
 namespace GigeVision.Core.Services
 {
@@ -36,6 +38,7 @@ namespace GigeVision.Core.Services
         private int portRx;
         private string rxIP;
         private uint width, height, offsetX, offsetY, bytesPerPixel;
+        private Dictionary<string,ICategory> cameraParametersCache;
 
         /// <summary>
         /// Camera constructor with initialized Gvcp Controller
@@ -44,6 +47,7 @@ namespace GigeVision.Core.Services
         public Camera(IGvcp gvcp)
         {
             Gvcp = gvcp;
+            cameraParametersCache = new Dictionary<string, ICategory>();
             Task.Run(async () => await SyncParameters().ConfigureAwait(false));
             Init();
         }
@@ -57,6 +61,7 @@ namespace GigeVision.Core.Services
         public Camera()
         {
             Gvcp = new Gvcp();
+            cameraParametersCache = new Dictionary<string, ICategory>();
             Init();
         }
 
@@ -70,6 +75,15 @@ namespace GigeVision.Core.Services
         /// </summary>
         public IGvcp Gvcp { get; private set; }
 
+        /// <summary>
+        /// The source port from camera to host for GSVP protocol
+        /// </summary>
+        public int SCSPPort
+        {
+            get;
+            private set;
+        }
+        
         /// <summary>
         /// Camera height
         /// </summary>
@@ -99,6 +113,25 @@ namespace GigeVision.Core.Services
             }
         }
 
+        /// <summary>
+        /// The receive socket timeout in milliseconds. Set -1 for infinite timeout
+        /// </summary>
+        public int ReceiveTimeoutInMilliseconds
+        {
+            get => Gvcp.ReceiveTimeoutInMilliseconds;
+            set
+            {
+                Gvcp.ReceiveTimeoutInMilliseconds = value;
+                if (StreamReceiver != null)
+                {
+                    StreamReceiver.ReceiveTimeoutInMilliseconds = value;   
+                }
+                
+                OnPropertyChanged(nameof(ReceiveTimeoutInMilliseconds));
+            }
+        }
+
+        
         /// <summary>
         /// Multi-Cast Option
         /// </summary>
@@ -473,29 +506,40 @@ namespace GigeVision.Core.Services
                 SetRxBuffer();
             }
 
-            SetupReceiver();
+            
 
             var acquisitionStart = (await Gvcp.GetRegister(nameof(RegisterName.AcquisitionStart))).pValue;
             if (acquisitionStart != null)
             {
                 if (await Gvcp.TakeControl(true).ConfigureAwait(false))
                 {
-                    SetupRxThread();
                     var gevSCPHostPort = (await Gvcp.GetRegister(nameof(GvcpRegister.GevSCPHostPort))).pValue;
                     if ((await gevSCPHostPort.SetValueAsync((uint)PortRx).ConfigureAwait(false) as GvcpReply).Status == GvcpStatus.GEV_STATUS_SUCCESS)
                     {
                         var gevSCDA = (await Gvcp.GetRegister(nameof(GvcpRegister.GevSCDA))).pValue;
-                        await gevSCDA.SetValueAsync(Converter.IpToNumber(ip2Send)).ConfigureAwait(false);
+                        if ((await gevSCDA.SetValueAsync(Converter.IpToNumber(ip2Send)).ConfigureAwait(false) as GvcpReply).Status == GvcpStatus.GEV_STATUS_SUCCESS)
+                        {
+                            var gevSCSP = (await Gvcp.GetRegister(nameof(GvcpRegister.GevSCSP))).pValue;
+                            var getSCSPPortValue = await gevSCSP.GetValueAsync().ConfigureAwait((false));
+                            if (getSCSPPortValue.HasValue)
+                            {
+                                SCSPPort = (int)getSCSPPortValue.Value;
+                            }
 
-                        var gevSCPSPacketSize = (await Gvcp.GetRegister(nameof(GvcpRegister.GevSCPSPacketSize))).pValue;
-                        var reply = await gevSCPSPacketSize.SetValueAsync(Payload).ConfigureAwait(false);
-                        if (((await acquisitionStart.SetValueAsync(1).ConfigureAwait(false)) as GvcpReply).Status == GvcpStatus.GEV_STATUS_SUCCESS)
-                        {
-                            IsStreaming = true;
-                        }
-                        else
-                        {
-                            await StopStream().ConfigureAwait(false);
+                            var gevSCPSPacketSize = (await Gvcp.GetRegister(nameof(GvcpRegister.GevSCPSPacketSize))).pValue;
+                            var reply = await gevSCPSPacketSize.SetValueAsync(Payload).ConfigureAwait(false);
+                            
+                            SetupReceiver();
+                            SetupRxThread();
+                            
+                            if (((await acquisitionStart.SetValueAsync(1).ConfigureAwait(false)) as GvcpReply).Status == GvcpStatus.GEV_STATUS_SUCCESS)
+                            {
+                                IsStreaming = true;
+                            }
+                            else
+                            {
+                                await StopStream().ConfigureAwait(false);
+                            }   
                         }
                     }
                 }
@@ -507,10 +551,6 @@ namespace GigeVision.Core.Services
                         IsStreaming = true;
                     }
                 }
-            }
-            else
-            {
-                Updates?.Invoke(this, "Fatal Error: Acquisition Start Register Not Found");
             }
             return IsStreaming;
         }
@@ -530,6 +570,132 @@ namespace GigeVision.Core.Services
             return IsStreaming;
         }
 
+        public async Task<long?> GetParameterValue(string parameterName)
+        {
+            if (cameraParametersCache == null) 
+            {
+                cameraParametersCache = new Dictionary<string, ICategory>();
+            }
+            ICategory parameter = await GetParameter(parameterName).ConfigureAwait(false);
+            if (parameter == null)
+            {
+                return null;
+            }
+           
+            return await parameter.PValue.GetValueAsync().ConfigureAwait(false);
+        }
+        
+        /// <summary>
+        /// Load a camera parameter
+        /// </summary>
+        /// <param name="parameterName"></param>
+        /// <returns></returns>
+        public async Task<bool> LoadParameter(string parameterName)
+        {
+            var value = (await Gvcp.GetRegisterCategory(parameterName).ConfigureAwait(false));
+            if (value == null)
+            {
+                return false;
+            }
+
+            cameraParametersCache[parameterName] = value;
+            return true;
+        }
+
+        /// <summary>
+        /// Obtain the parameter properties like name, description, tooltip
+        /// </summary>
+        /// <param name="parameterName">The name of the parameter</param>
+        /// <returns></returns>
+        public async Task<CategoryProperties> GetParameterProperties(string parameterName)
+        {
+            ICategory parameter = await GetParameter(parameterName).ConfigureAwait(false);
+            if (parameter == null)
+            {
+                return null;
+            }
+
+            return parameter.CategoryProperties;
+        }
+        
+        /// <summary>
+        /// Obtain the minimum value allowed for the parameter. 0 if the parameter does not support it.
+        /// </summary>
+        /// <param name="parameterName">The name of the parameter</param>
+        /// <returns></returns>
+        public async Task<long> GetParameterMinValue(string parameterName)
+        {
+            ICategory parameter = await GetParameter(parameterName).ConfigureAwait(false);
+            
+            if (parameter == null)
+            {
+                return 0;
+            }
+
+            if (parameter.PMin == null)
+            {
+                return 0;
+            }
+            
+            var result = await parameter.PMin.GetValueAsync().ConfigureAwait(false);
+            return result ?? 0;
+        }
+        
+        /// <summary>
+        /// Obtain the maximum value allowed for the parameter. 0 if the parameter does not support it.
+        /// </summary>
+        /// <param name="parameterName">The name of the parameter</param>;
+        /// <returns></returns>
+        public async Task<long> GetParameterMaxValue(string parameterName)
+        {
+            ICategory parameter = await GetParameter(parameterName).ConfigureAwait(false);
+            
+            if (parameter == null)
+            {
+                return 0;
+            }
+
+            if (parameter.PMax == null)
+            {
+                return 0;
+            }
+            
+            var result = await parameter.PMax.GetValueAsync().ConfigureAwait(false);
+            return result ?? 0;
+        }
+        
+        /// <summary>
+        /// Get the description of the parameter
+        /// </summary>
+        /// <param name="parameterName">The name of the parameter</param>
+        /// <returns></returns>
+        public async Task<ICategory> GetParameter(string parameterName)
+        {
+            if (!cameraParametersCache.ContainsKey(parameterName) && ! await LoadParameter(parameterName).ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            return cameraParametersCache[parameterName];
+        }
+
+        /// <summary>
+        /// Set the value of a camera paramter
+        /// </summary>
+        /// <param name="parameterName">The name of the parameter to change</param>
+        /// <param name="value">the new value to set</param>
+        /// <returns></returns>
+        public async Task<bool> SetCameraParameter(string parameterName, long value)
+        {
+            if (!cameraParametersCache.ContainsKey(parameterName) && ! await LoadParameter(parameterName).ConfigureAwait(false))
+            {
+                return false;
+            }
+            
+            var result  = await cameraParametersCache[parameterName].PValue.SetValueAsync(value).ConfigureAwait(false) as GvcpReply;
+            return result.Status == GvcpStatus.GEV_STATUS_SUCCESS;
+        }
+
         /// <summary>
         /// It reads all the parameters from the camera
         /// </summary>
@@ -541,17 +707,13 @@ namespace GigeVision.Core.Services
                 if (!await Gvcp.ReadXmlFileAsync(IP))
                     return false;
 
-                var widthPValue = (await Gvcp.GetRegister(nameof(RegisterName.Width))).pValue;
-                var heightPValue = (await Gvcp.GetRegister(nameof(RegisterName.Height))).pValue;
-                var offsetXPValue = (await Gvcp.GetRegister(nameof(RegisterName.OffsetX))).pValue;
-                var offsetYPValue = (await Gvcp.GetRegister(nameof(RegisterName.OffsetY))).pValue;
-                var pixelFormatPValue = (await Gvcp.GetRegister(nameof(RegisterName.PixelFormat))).pValue;
-                Width = (uint)await widthPValue.GetValueAsync().ConfigureAwait(false);
-                Height = (uint)await heightPValue.GetValueAsync().ConfigureAwait(false);
-                OffsetX = (uint)await offsetXPValue.GetValueAsync().ConfigureAwait(false);
-                OffsetY = (uint)await offsetYPValue.GetValueAsync().ConfigureAwait(false);
-                PixelFormat = (PixelFormat)(uint)await pixelFormatPValue.GetValueAsync().ConfigureAwait(false);
+                Width = (uint)await GetParameterValue(nameof(RegisterName.Width)).ConfigureAwait(false);
+                Height = (uint)await GetParameterValue(nameof(RegisterName.Height)).ConfigureAwait(false);
+                OffsetX = (uint)await GetParameterValue(nameof(RegisterName.OffsetX)).ConfigureAwait(false);
+                OffsetY = (uint)await GetParameterValue(nameof(RegisterName.OffsetY)).ConfigureAwait(false);
+                PixelFormat = (PixelFormat)(uint)await GetParameterValue(nameof(RegisterName.PixelFormat)).ConfigureAwait(false);
                 bytesPerPixel = (uint)PixelFormatToBytesPerPixel(PixelFormat);
+                
                 return true;
             }
             catch (Exception ex)
@@ -625,6 +787,9 @@ namespace GigeVision.Core.Services
         {
             StreamReceiver ??= new StreamReceiverBufferswap();
             StreamReceiver.RxIP = RxIP;
+            StreamReceiver.CameraIP = IP;
+            StreamReceiver.CameraSourcePort = SCSPPort;
+            StreamReceiver.ReceiveTimeoutInMilliseconds = ReceiveTimeoutInMilliseconds;
             StreamReceiver.IsMulticast = IsMulticast;
             StreamReceiver.MulticastIP = MulticastIP;
             StreamReceiver.PortRx = PortRx;

@@ -12,6 +12,16 @@ namespace GigeVision.Core.Interfaces
         /// Event for frame ready
         /// </summary>
         EventHandler<byte[]> FrameReady { get; set; }
+        
+        /// <summary>
+        /// The camera source traffic port. Required for firewall traversal traffic
+        /// </summary>
+        int CameraSourcePort { get; set; }
+        
+        /// <summary>
+        /// Camera ip, required for firewall traversal traffic
+        /// </summary>
+        string CameraIP { get; set; }
 
         /// <summary>
         /// GVSP info for image info
@@ -47,11 +57,21 @@ namespace GigeVision.Core.Interfaces
         /// RX IP, required for multicast group
         /// </summary>
         string RxIP { get; set; }
+        
+        /// <summary>
+        /// The socket receive timeout in milliseconds. Set -1 to infinite timeout
+        /// </summary>
+        public int ReceiveTimeoutInMilliseconds { get; set; }
 
         /// <summary>
         /// General update event
         /// </summary>
         EventHandler<string> Updates { get; set; }
+        
+        /// <summary>
+        /// Time interval from a package to another for firewall traversal. Set value <= 0 to disable it
+        /// </summary>
+        public int FirewallPunchKeepAliveIntervalInSeconds { get; set; }
 
         /// <summary>
         /// Start reception thread

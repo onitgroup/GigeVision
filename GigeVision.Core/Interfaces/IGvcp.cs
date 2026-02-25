@@ -27,6 +27,11 @@ namespace GigeVision.Core.Interfaces
         /// Camera IP
         /// </summary>
         string CameraIp { get; set; }
+        
+        /// <summary>
+        /// The socket read timeout in milliseconds. Set -1 for infinite timeout
+        /// </summary>
+        int ReceiveTimeoutInMilliseconds { get; set; }
 
         /// <summary>
         /// Controlling port for GVCP
@@ -249,7 +254,7 @@ namespace GigeVision.Core.Interfaces
         /// <param name="macAddress">MAC address of the camera</param>
         /// <param name="iPToSet">IP of camera that needs to be set</param>
         /// <returns>Success Status</returns>
-        Task<bool> ForceIPAsync(byte[] macAddress, string iPToSet);
+        Task<bool> ForceIPAsync(byte[] macAddress, string iPToSet, string netmask);
 
         /// <summary>
         /// Forces the IP of camera to be changed to the given IP
@@ -257,7 +262,7 @@ namespace GigeVision.Core.Interfaces
         /// <param name="macAddress">MAC address of the camera</param>
         /// <param name="iPToSet">IP of camera that needs to be set</param>
         /// <returns>Success Status</returns>
-        Task<bool> ForceIPAsync(string macAddress, string iPToSet);
+        Task<bool> ForceIPAsync(string macAddress, string iPToSet, string netmask);
 
         /// <summary>
         /// It will get all the devices from the network and then fires the event for updated list
@@ -307,11 +312,26 @@ namespace GigeVision.Core.Interfaces
         Task<(IPValue pValue, IRegister register)> GetRegister(string name);
 
         /// <summary>
+        /// Get paramter descriptor
+        /// </summary>
+        /// <param name="name"></param>
+        /// <returns></returns>
+        Task<ICategory> GetRegisterCategory(string name);
+
+        /// <summary>
         /// Reads xml file
         /// </summary>
         /// <param name="ip">Camera IP</param>
         /// <returns></returns>
         Task<bool> ReadXmlFileAsync(string ip = null);
+
+        /// <summary>
+        /// Reads xml file
+        /// </summary>
+        /// <param name="path">path</param>
+        /// <param name="ip">Camera IP</param>
+        /// <returns></returns>
+        Task SaveXmlFileFromCamera(string path, string ip = null);
 
         /// <summary>
         /// Sycnronization check for xml file loading

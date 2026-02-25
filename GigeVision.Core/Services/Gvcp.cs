@@ -39,13 +39,30 @@ namespace GigeVision.Core.Services
         {
             CameraIp = ip;
         }
+        
+        /// <summary>
+        /// Gvcp constructor, initializes camera IP and socket timeout, and try to get register values
+        /// </summary>
+        /// <param name="ip"></param>
+        /// <param name="socketReadTimeoutInMilliseconds"></param>
+        public Gvcp(string ip, int socketReadTimeoutInMilliseconds)
+        {
+            CameraIp = ip;
+            ReceiveTimeoutInMilliseconds = socketReadTimeoutInMilliseconds;
+        }
 
         /// <summary>
         /// Default GVCP constructor
         /// </summary>
         public Gvcp()
         {
+            ReceiveTimeoutInMilliseconds = 1000;
         }
+        
+        /// <summary>
+        /// The socket read timeout in milliseconds. Set -1 for infinite timeout
+        /// </summary>
+        public int ReceiveTimeoutInMilliseconds { get; set; }
 
         /// <summary>
         /// Camera IP, whenever changed, library tries to get latest register values
@@ -146,7 +163,7 @@ namespace GigeVision.Core.Services
         /// <param name="macAddress">MAC address of the camera</param>
         /// <param name="iPToSet">IP of camera that needs to be set</param>
         /// <returns>Success Status</returns>
-        public async Task<bool> ForceIPAsync(byte[] macAddress, string iPToSet)
+        public async Task<bool> ForceIPAsync(byte[] macAddress, string iPToSet, string netmask)
         {
             var forceIpCommand = new byte[64];
 
@@ -167,7 +184,7 @@ namespace GigeVision.Core.Services
             Array.Reverse(ipBytes, 0, 4);
             Array.Copy(ipBytes, 0, forceIpCommand, 28, 4);//4bytes, TotalLength= 32 + (12 reserved bytes) = 44
 
-            var maskBytes = BitConverter.GetBytes(Converter.ConvertIpToNumber("255.255.255.0"));
+            var maskBytes = BitConverter.GetBytes(Converter.ConvertIpToNumber(netmask));
             Array.Reverse(maskBytes, 0, 4);
             Array.Copy(maskBytes, 0, forceIpCommand, 44, 4);//4bytes, TotalLength= 48 + (12 reserved bytes) = 60
 
@@ -198,9 +215,9 @@ namespace GigeVision.Core.Services
         /// <param name="macAddress">Mac Address of Camera</param>
         /// <param name="iPToSet">IP to set</param>
         /// <returns></returns>
-        public async Task<bool> ForceIPAsync(string macAddress, string iPToSet)
+        public async Task<bool> ForceIPAsync(string macAddress, string iPToSet, string netmask)
         {
-            return await ForceIPAsync(Converter.HexStringToByteArray(macAddress), iPToSet).ConfigureAwait(false);
+            return await ForceIPAsync(Converter.HexStringToByteArray(macAddress), iPToSet, netmask).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -228,6 +245,27 @@ namespace GigeVision.Core.Services
         public async Task<(IPValue pValue, IRegister register)> GetRegister(string name)
         {
             (IPValue pValue, IRegister register) tuple = new(null, null);
+            var category = await xmlHelper.GetRegisterByName(name);
+            if (category == null)
+            {
+                return tuple;
+            }
+
+            if (category.PValue is IPValue pValue)
+            {
+                tuple.pValue = pValue;
+            }
+            
+            if (category.PValue is IRegister register)
+            {
+                tuple.register = register;
+            }
+
+            return tuple;
+        }
+        
+        public async Task<ICategory> GetRegisterCategory(string name)
+        {
             return await xmlHelper.GetRegisterByName(name);
         }
 
@@ -315,7 +353,7 @@ namespace GigeVision.Core.Services
             {
                 GvcpCommand command = new(memoryAddress, GvcpCommandType.ReadMem, requestID: gvcpRequestID++, count: count);
                 using UdpClient socket = new();
-                socket.Client.ReceiveTimeout = 1000;
+                socket.Client.ReceiveTimeout = ReceiveTimeoutInMilliseconds;
                 socket.Connect(ip, 3956);
                 return await SendGvcpCommand(socket, command).ConfigureAwait(false);
             }
@@ -938,6 +976,32 @@ namespace GigeVision.Core.Services
             return xmlFile;
         }
 
+        public async Task SaveXmlFileFromCamera(string path, string ip = null)
+        {
+            if (string.IsNullOrEmpty(ip))
+            {
+                ip = CameraIp;
+            }
+            else
+            {
+                if (ValidateIp(ip) is false)
+                {
+                    throw new InvalidIpException();
+                }
+            }
+
+            (var fileData, var fileName) = await GetRawXmlFileFromCamera(ip).ConfigureAwait(false);
+            var filePath = Path.Combine(path, fileName);
+            try
+            {
+                File.WriteAllBytes(filePath, fileData);
+            }
+            catch (Exception ex)
+            {
+
+            }
+        }
+
         private async Task ReadAllRegisters(List<ICategory> categories)
         {
             if (categories == null)
@@ -1036,7 +1100,7 @@ namespace GigeVision.Core.Services
         /// <param name="packet"></param>
         /// <param name="receptionEvent"></param>
         /// <param name="ipNetwork"></param>
-        private async Task SendBroadCastPacket(byte[] packet, Action<IPEndPoint, byte[]> receptionEvent, string ipNetworkFixed = "")
+        private async Task SendBroadCastPacket(byte[] packet, Action<IPEndPoint, byte[]> receptionEvent, string ipNetworkFixed = "", string allowedNetMask = "*")
         {
             var reply = Array.Empty<byte>();
             List<IPAddress> ips = new();
@@ -1046,7 +1110,7 @@ namespace GigeVision.Core.Services
             }
             else
             {
-                var ipsString = NetworkService.GetAllInterfaces();
+                var ipsString = NetworkService.GetAllInterfaces(allowedNetMask);
                 foreach (var ipString in ipsString)
                 {
                     if (IPAddress.TryParse(ipString, out IPAddress ipToAdd))
