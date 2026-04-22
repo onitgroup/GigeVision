@@ -14,8 +14,11 @@ namespace GigeVision.Core.Services
     /// </summary>
     public abstract class StreamReceiverBase : BaseNotifyPropertyChanged, IStreamReceiver
     {
+        private const int MinimumReceiveBufferBytes = 8 * 1024 * 1024;
         protected Socket socketRxRaw;
         private DateTime lastFirewallPunchKeepAliveSent;
+        private const byte GvspDataPacketType = 0x03;
+        private const byte GvspDataEndPacketType = 0x02;
 
         /// <summary>
         /// Receives the GigeStream
@@ -116,7 +119,7 @@ namespace GigeVision.Core.Services
         {
             IsReceiving = false;
             socketRxRaw?.Close();
-            socketRxRaw.Dispose();
+            socketRxRaw?.Dispose();
         }
 
         /// <summary>
@@ -128,6 +131,7 @@ namespace GigeVision.Core.Services
             socketRxRaw.Receive(singlePacket);
             GvspInfo.IsDecodingAsVersion2 = ((singlePacket[4] & 0xF0) >> 4) == 8;
             GvspInfo.SetDecodingTypeParameter();
+            uint pixelFormat = 0;
 
             var packetID = (singlePacket[GvspInfo.PacketIDIndex] << 8) | singlePacket[GvspInfo.PacketIDIndex + 1];
             if (packetID == 0)
@@ -135,32 +139,58 @@ namespace GigeVision.Core.Services
                 GvspInfo.IsImageData = ((singlePacket[10] << 8) | singlePacket[11]) == 1;
                 if (GvspInfo.IsImageData)
                 {
-                    GvspInfo.BytesPerPixel = (int)Math.Ceiling((double)(singlePacket[21] / 8));
+                    pixelFormat = (uint)((singlePacket[20] << 24) | (singlePacket[21] << 16) | (singlePacket[22] << 8) | singlePacket[23]);
+                    GvspInfo.BytesPerPixel = PixelFormatHelper.GetBytesPerPixelRoundedUp(pixelFormat);
                     GvspInfo.Width = (singlePacket[24] << 24) | (singlePacket[25] << 16) | (singlePacket[26] << 8) | (singlePacket[27]);
                     GvspInfo.Height = (singlePacket[28] << 24) | (singlePacket[29] << 16) | (singlePacket[30] << 8) | (singlePacket[31]);
                 }
             }
 
-            //Optimizing the array length for receive buffer
-            int length = socketRxRaw.Receive(singlePacket);
-            packetID = (singlePacket[GvspInfo.PacketIDIndex] << 8) | singlePacket[GvspInfo.PacketIDIndex + 1];
-            if (packetID > 0)
+            // Probe a small packet window and keep the largest data-packet length.
+            // Startup can land on a short final packet, which would otherwise inflate FinalPacketID
+            // and produce false packet-loss reports on every frame.
+            int length = 0;
+            int maxPacketLength = 0;
+            int dataPacketSamples = 0;
+            const int packetLengthProbeCount = 64;
+            for (int probe = 0; probe < packetLengthProbeCount; probe++)
             {
-                GvspInfo.PacketLength = length;
+                length = socketRxRaw.Receive(singlePacket);
+                packetID = (singlePacket[GvspInfo.PacketIDIndex] << 8) | singlePacket[GvspInfo.PacketIDIndex + 1];
+                if (packetID > 0 && IsDataPacket(singlePacket[4]))
+                {
+                    dataPacketSamples++;
+                    if (length > maxPacketLength)
+                    {
+                        maxPacketLength = length;
+                    }
+
+                    if (dataPacketSamples >= 2 && length == maxPacketLength)
+                    {
+                        break;
+                    }
+                }
             }
+
+            if (maxPacketLength > 0)
+            {
+                GvspInfo.PacketLength = maxPacketLength;
+            }
+
             IsReceiving = length > 10;
             GvspInfo.PayloadSize = GvspInfo.PacketLength - GvspInfo.PayloadOffset;
 
             if (GvspInfo.Width > 0 && GvspInfo.Height > 0) //Now we can calculate the final packet ID
             {
-                var totalBytesExpectedForOneFrame = GvspInfo.Width * GvspInfo.Height * GvspInfo.BytesPerPixel;
+                var totalBytesExpectedForOneFrame = PixelFormatHelper.GetFrameSize(GvspInfo.Width, GvspInfo.Height, pixelFormat);
                 GvspInfo.FinalPacketID = totalBytesExpectedForOneFrame / GvspInfo.PayloadSize;
                 if (totalBytesExpectedForOneFrame % GvspInfo.PayloadSize != 0)
                 {
                     GvspInfo.FinalPacketID++;
                 }
-                socketRxRaw.ReceiveBufferSize = (GvspInfo.PacketLength * GvspInfo.FinalPacketID); //Single frame with GVSP header
-                GvspInfo.RawImageSize = GvspInfo.Width * GvspInfo.Height * GvspInfo.BytesPerPixel;
+                int recommendedReceiveBuffer = GvspInfo.PacketLength * GvspInfo.FinalPacketID * 4;
+                socketRxRaw.ReceiveBufferSize = Math.Max(MinimumReceiveBufferBytes, recommendedReceiveBuffer);
+                GvspInfo.RawImageSize = totalBytesExpectedForOneFrame;
             }
         }
 
@@ -169,11 +199,12 @@ namespace GigeVision.Core.Services
         /// </summary>
         protected virtual void Receiver()
         {
-            int packetID = 0, bufferIndex = 0, bufferLength = 0, bufferStart = 0, length = 0, packetRxCount = 1, packetRxCountClone, bufferIndexClone;
+            int packetID = 0, bufferIndex = 0, bufferLength = 0, bufferStart = 0, length = 0, packetRxCount = 0, packetRxCountClone, bufferIndexClone;
             ulong imageID, lastImageID = 0, lastImageIDClone, deltaImageID;
             byte[] blockID;
             byte[][] buffer = new byte[2][];
             int frameCounter = 0;
+            bool skipUntilNextFrameBoundary = true;
             try
             {
                 DetectGvspType();
@@ -184,8 +215,13 @@ namespace GigeVision.Core.Services
                 while (IsReceiving)
                 {
                     length = socketRxRaw.Receive(singlePacket);
-                    if (singlePacket[4] == GvspInfo.DataIdentifier) //Packet
+                    if (IsDataPacket(singlePacket[4])) //Packet
                     {
+                        if (skipUntilNextFrameBoundary)
+                        {
+                            continue;
+                        }
+
                         packetRxCount++;
                         packetID = (singlePacket[GvspInfo.PacketIDIndex] << 8) | singlePacket[GvspInfo.PacketIDIndex + 1];
                         bufferStart = (packetID - 1) * GvspInfo.PayloadSize; //This use buffer length of regular packet
@@ -193,7 +229,7 @@ namespace GigeVision.Core.Services
                         singlePacket.Slice(GvspInfo.PayloadOffset, bufferLength).CopyTo(buffer[bufferIndex].AsSpan().Slice(bufferStart, bufferLength));
                         continue;
                     }
-                    if (singlePacket[4] == GvspInfo.DataEndIdentifier)
+                    if (IsDataEndPacket(singlePacket[4]))
                     {
                         if (GvspInfo.FinalPacketID == 0)
                         {
@@ -205,6 +241,15 @@ namespace GigeVision.Core.Services
                         Array.Reverse(blockID);
                         Array.Resize(ref blockID, 8);
                         imageID = BitConverter.ToUInt64(blockID);
+
+                        if (skipUntilNextFrameBoundary)
+                        {
+                            lastImageID = imageID;
+                            packetRxCount = 0;
+                            skipUntilNextFrameBoundary = false;
+                            continue;
+                        }
+
                         packetRxCountClone = packetRxCount;
                         lastImageIDClone = lastImageID;
                         bufferIndexClone = bufferIndex;
@@ -212,32 +257,33 @@ namespace GigeVision.Core.Services
                         packetRxCount = 0;
                         lastImageID = imageID;
 
-                        if (DateTime.Now.Subtract(lastFirewallPunchKeepAliveSent).Seconds >= FirewallPunchKeepAliveIntervalInSeconds && FirewallPunchKeepAliveIntervalInSeconds > 0)
+                        if (DateTime.Now.Subtract(lastFirewallPunchKeepAliveSent).Seconds >= FirewallPunchKeepAliveIntervalInSeconds && FirewallPunchKeepAliveIntervalInSeconds > 0 && CameraSourcePort > 0 && IPAddress.TryParse(CameraIP, out IPAddress cameraAddress))
                         {
                             lastFirewallPunchKeepAliveSent = DateTime.Now;
-                            socketRxRaw.SendTo(new byte[8], new IPEndPoint(IPAddress.Parse(CameraIP), CameraSourcePort));
+                            socketRxRaw.SendTo(new byte[8], new IPEndPoint(cameraAddress, CameraSourcePort));
                         }
 
-                        Task.Run(() =>
+                        //Checking if we receive all packets
+                        int packetCountDelta = packetRxCountClone - GvspInfo.FinalPacketID;
+                        if (Math.Abs(packetCountDelta) <= MissingPacketTolerance)
                         {
-                            //Checking if we receive all packets
-                            if (Math.Abs(packetRxCountClone - GvspInfo.FinalPacketID) <= MissingPacketTolerance)
-                            {
-                                ++frameCounter;
-                                FrameReady?.Invoke(imageID, buffer[bufferIndex]);
-                            }
-                            else
-                            {
-                                Updates?.Invoke(UpdateType.FrameLoss, $"Image tx skipped because of {packetRxCountClone - GvspInfo.FinalPacketID} packet loss");
-                            }
+                            ++frameCounter;
+                            FrameReady?.Invoke(imageID, buffer[bufferIndexClone]);
+                        }
+                        else
+                        {
+                            string frameLossMessage = packetCountDelta < 0
+                                ? $"Frame skipped because {Math.Abs(packetCountDelta)} packets were missing."
+                                : $"Frame skipped because {packetCountDelta} unexpected extra packets were received.";
+                            Updates?.Invoke(UpdateType.FrameLoss, frameLossMessage);
+                        }
 
-                            deltaImageID = imageID - lastImageIDClone;
-                            //This <10000 is just to skip the overflow value when the counter (2 or 8 bytes) will complete it should not show false missing images
-                            if (deltaImageID != 1 && deltaImageID < 10000)
-                            {
-                                Updates?.Invoke(UpdateType.FrameLoss, $"{imageID - lastImageIDClone - 1} Image missed between {lastImageIDClone}-{imageID}");
-                            }
-                        });
+                        deltaImageID = imageID - lastImageIDClone;
+                        //This <10000 is just to skip the overflow value when the counter (2 or 8 bytes) will complete it should not show false missing images
+                        if (deltaImageID != 1 && deltaImageID < 10000)
+                        {
+                            Updates?.Invoke(UpdateType.FrameLoss, $"{imageID - lastImageIDClone - 1} Image missed between {lastImageIDClone}-{imageID}");
+                        }
                     }
                 }
             }
@@ -249,6 +295,16 @@ namespace GigeVision.Core.Services
                 }
                 IsReceiving = false;
             }
+        }
+
+        private static bool IsDataPacket(byte packetHeaderType)
+        {
+            return (packetHeaderType & 0x0F) == GvspDataPacketType;
+        }
+
+        private static bool IsDataEndPacket(byte packetHeaderType)
+        {
+            return (packetHeaderType & 0x0F) == GvspDataEndPacketType;
         }
 
         /// <summary>
@@ -265,18 +321,23 @@ namespace GigeVision.Core.Services
                 }
                 socketRxRaw = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
                 socketRxRaw.Bind(new IPEndPoint(IPAddress.Any, PortRx));
-                socketRxRaw.ReceiveTimeout = ReceiveTimeoutInMilliseconds;
+                PortRx = ((IPEndPoint)socketRxRaw.LocalEndPoint).Port;
+                socketRxRaw.ReceiveTimeout = ReceiveTimeoutInMilliseconds > 0 ? ReceiveTimeoutInMilliseconds : 0;
 
-                socketRxRaw.SendTo(new byte[8], new IPEndPoint(IPAddress.Parse(CameraIP), CameraSourcePort));
-                lastFirewallPunchKeepAliveSent = DateTime.Now;
+                if (CameraSourcePort > 0 && IPAddress.TryParse(CameraIP, out IPAddress cameraAddress))
+                {
+                    socketRxRaw.SendTo(new byte[8], new IPEndPoint(cameraAddress, CameraSourcePort));
+                    lastFirewallPunchKeepAliveSent = DateTime.Now;
+                }
 
                 if (IsMulticast)
                 {
                     MulticastOption mcastOption = new(IPAddress.Parse(MulticastIP), IPAddress.Parse(RxIP));
                     socketRxRaw.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership, mcastOption);
                 }
-                //One full hd image with GVSP2.0 Header as default, it will be updated for image type
-                socketRxRaw.ReceiveBufferSize = (int)(1920 * 1100);
+                // Use a generous default receive buffer so bursty UDP frame delivery does not overflow
+                // before the stream metadata is available to calculate a frame-sized buffer.
+                socketRxRaw.ReceiveBufferSize = MinimumReceiveBufferBytes;
             }
             catch (Exception ex)
             {

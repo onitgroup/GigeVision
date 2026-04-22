@@ -64,9 +64,14 @@ namespace GigeVision.Core.Interfaces
         uint Payload { get; set; }
 
         /// <summary>
+        /// Optional inter-packet delay written to GevSCPD before starting the stream.
+        /// </summary>
+        uint StreamPacketDelay { get; set; }
+
+        /// <summary>
         /// Tolerance for missing packet
         /// </summary>
-        public int MissingPacketTolerance { get; set; } 
+        public int MissingPacketTolerance { get; set; }
 
         /// <summary>
         /// Camera width
@@ -121,13 +126,114 @@ namespace GigeVision.Core.Interfaces
         /// <param name="rxIP">If rxIP is not provided, method will detect system IP and use it</param>
         /// <param name="rxPort">It will set randomly when not provided</param>
         /// <returns></returns>
-        Task<bool> StartStreamAsync(string rxIP = null, int rxPort = 0);
+        Task<bool> StartStreamAsync(string? rxIP = null, int rxPort = 0);
 
         /// <summary>
         /// Stops the camera stream and leave camera control
         /// </summary>
         /// <returns>Is streaming status</returns>
         Task<bool> StopStream();
+
+        /// <summary>
+        /// Gets the value of an integer-backed parameter.
+        /// </summary>
+        /// <param name="parameterName">The parameter name.</param>
+        /// <returns>The parameter value when available.</returns>
+        Task<long?> GetParameterValue(string parameterName);
+
+        /// <summary>
+        /// Gets the minimum of an integer-backed parameter.
+        /// </summary>
+        /// <param name="parameterName">The parameter name.</param>
+        /// <returns>The minimum value when available.</returns>
+        Task<long> GetParameterMinValue(string parameterName);
+
+        /// <summary>
+        /// Gets the maximum of an integer-backed parameter.
+        /// </summary>
+        /// <param name="parameterName">The parameter name.</param>
+        /// <returns>The maximum value when available.</returns>
+        Task<long> GetParameterMaxValue(string parameterName);
+
+        /// <summary>
+        /// Sets an integer-backed parameter.
+        /// </summary>
+        /// <param name="parameterName">The parameter name.</param>
+        /// <param name="value">The value to set.</param>
+        /// <returns>True when the write succeeds.</returns>
+        Task<bool> SetCameraParameter(string parameterName, long value);
+
+        /// <summary>
+        /// Sets a floating-point or converter-backed parameter.
+        /// </summary>
+        /// <param name="parameterName">The parameter name.</param>
+        /// <param name="value">The value to set.</param>
+        /// <returns>True when the write succeeds.</returns>
+        Task<bool> SetCameraParameter(string parameterName, double value);
+
+        /// <summary>
+        /// Sets a boolean parameter.
+        /// </summary>
+        /// <param name="parameterName">The parameter name.</param>
+        /// <param name="value">The value to set.</param>
+        /// <returns>True when the write succeeds.</returns>
+        Task<bool> SetCameraParameter(string parameterName, bool value);
+
+        /// <summary>
+        /// Gets the value of a parameter using the requested CLR type.
+        /// </summary>
+        /// <typeparam name="T">The requested value type.</typeparam>
+        /// <param name="parameterName">The parameter name.</param>
+        /// <returns>The parameter value when available.</returns>
+        Task<T?> GetParameterValue<T>(string parameterName) where T : struct;
+
+        /// <summary>
+        /// Gets the value of a floating-point or converter-backed parameter.
+        /// </summary>
+        /// <param name="parameterName">The parameter name.</param>
+        /// <returns>The parameter value when available.</returns>
+        [Obsolete("Use GetParameterValue<double>(parameterName) instead.")]
+        Task<double?> GetFloatParameterValue(string parameterName);
+
+        /// <summary>
+        /// Gets the minimum of a floating-point or converter-backed parameter.
+        /// </summary>
+        /// <param name="parameterName">The parameter name.</param>
+        /// <returns>The minimum value when available.</returns>
+        Task<double> GetFloatParameterMinValue(string parameterName);
+
+        /// <summary>
+        /// Gets the maximum of a floating-point or converter-backed parameter.
+        /// </summary>
+        /// <param name="parameterName">The parameter name.</param>
+        /// <returns>The maximum value when available.</returns>
+        Task<double> GetFloatParameterMaxValue(string parameterName);
+
+        /// <summary>
+        /// Sets a floating-point or converter-backed parameter.
+        /// </summary>
+        /// <param name="parameterName">The parameter name.</param>
+        /// <param name="value">The value to set.</param>
+        /// <returns>True when the write succeeds.</returns>
+        [Obsolete("Use SetCameraParameter(parameterName, value) instead.")]
+        Task<bool> SetFloatParameter(string parameterName, double value);
+
+        /// <summary>
+        /// Gets the value of a boolean parameter.
+        /// </summary>
+        /// <param name="parameterName">The parameter name.</param>
+        /// <returns>The boolean value when available.</returns>
+        [Obsolete("Use GetParameterValue<bool>(parameterName) instead.")]
+        Task<bool?> GetBooleanParameterValue(string parameterName);
+
+        /// <summary>
+        /// Sets a boolean parameter.
+        /// </summary>
+        /// <param name="parameterName">The parameter name.</param>
+        /// <param name="value">The value to set.</param>
+        /// <returns>True when the write succeeds.</returns>
+        [Obsolete("Use SetCameraParameter(parameterName, value) instead.")]
+        Task<bool> SetBooleanParameter(string parameterName, bool value);
 
         /// <summary>
         /// Sets the Resolution
