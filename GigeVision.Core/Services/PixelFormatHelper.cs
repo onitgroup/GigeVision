@@ -3,8 +3,24 @@ using GigeVision.Core.Enums;
 
 namespace GigeVision.Core.Services
 {
-    internal static class PixelFormatHelper
+    public static class PixelFormatHelper
     {
+        /// <summary>
+        /// Returns the human-readable name for a pixel format value.
+        /// Checks <see cref="PixelFormatRegistry"/> first, then the standard
+        /// <see cref="GigeVision.Core.Enums.PixelFormat"/> enum, then falls back to hex.
+        /// </summary>
+        public static string GetName(uint pixelFormat)
+        {
+            if (PixelFormatRegistry.TryGet(pixelFormat, out var info))
+                return info.Name;
+
+            if (Enum.IsDefined(typeof(PixelFormat), pixelFormat))
+                return ((PixelFormat)pixelFormat).ToString();
+
+            return $"0x{pixelFormat:X8}";
+        }
+
         public static int GetBytesPerPixelRoundedUp(uint pixelFormat)
         {
             return DivideRoundUp(GetEffectiveBitsPerPixel(pixelFormat), 8);
@@ -45,7 +61,7 @@ namespace GigeVision.Core.Services
                 return info.IsBayer;
             }
 
-            if (Enum.IsDefined(typeof(PixelFormat), (int)pixelFormat))
+            if (Enum.IsDefined(typeof(PixelFormat), pixelFormat))
             {
                 return ((PixelFormat)pixelFormat).ToString().Contains("Bayer");
             }

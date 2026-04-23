@@ -262,6 +262,13 @@ namespace GigeVision.Core.Services
         public PixelFormat PixelFormat { get; set; }
 
         /// <summary>
+        /// Human-readable pixel format name. Returns the registry name for vendor-specific
+        /// formats (e.g. "QOI_BayerRG8"), the enum name for standard PFNC formats,
+        /// or a hex string (e.g. "0x81080B99") for completely unknown values.
+        /// </summary>
+        public string PixelFormatName => PixelFormatHelper.GetName((uint)PixelFormat);
+
+        /// <summary>
         /// Rx port
         /// </summary>
         public int PortRx
