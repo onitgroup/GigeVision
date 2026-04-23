@@ -54,6 +54,12 @@ namespace GigeVision.Core.Interfaces
         EventHandler<byte[]> FrameReady { get; set; }
 
         /// <summary>
+        /// Fired alongside <see cref="FrameReady"/> with per-frame metadata
+        /// (hardware timestamp and frame ID) from the GVSP image leader.
+        /// </summary>
+        EventHandler<GvspFrameInfo> FrameReadyWithInfo { get; set; }
+
+        /// <summary>
         /// Event for general updates
         /// </summary>
         EventHandler<string> Updates { get; set; }

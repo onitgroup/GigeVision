@@ -17,6 +17,7 @@ namespace GigeVision.Core.Services
         private const int MinimumReceiveBufferBytes = 8 * 1024 * 1024;
         protected Socket socketRxRaw;
         private DateTime lastFirewallPunchKeepAliveSent;
+        private const byte GvspLeaderPacketType = 0x01;
         private const byte GvspDataPacketType = 0x03;
         private const byte GvspDataEndPacketType = 0x02;
 
@@ -45,6 +46,12 @@ namespace GigeVision.Core.Services
         /// Event for frame ready
         /// </summary>
         public EventHandler<byte[]> FrameReady { get; set; }
+
+        /// <summary>
+        /// Fired alongside <see cref="FrameReady"/> and carries per-frame metadata
+        /// (hardware timestamp and frame ID) extracted from the GVSP image leader packet.
+        /// </summary>
+        public EventHandler<GvspFrameInfo> FrameReadyWithInfo { get; set; }
 
         /// <summary>
         /// GVSP info for image info
@@ -201,6 +208,7 @@ namespace GigeVision.Core.Services
         {
             int packetID = 0, bufferIndex = 0, bufferLength = 0, bufferStart = 0, length = 0, packetRxCount = 0, packetRxCountClone, bufferIndexClone;
             ulong imageID, lastImageID = 0, lastImageIDClone, deltaImageID;
+            ulong currentFrameTimestamp = 0;
             byte[] blockID;
             byte[][] buffer = new byte[2][];
             int frameCounter = 0;
@@ -215,6 +223,24 @@ namespace GigeVision.Core.Services
                 while (IsReceiving)
                 {
                     length = socketRxRaw.Receive(singlePacket);
+                    if (IsLeaderPacket(singlePacket[4]))
+                    {
+                        // Extract 64-bit big-endian timestamp from the image leader.
+                        // TimeStampIndex is already set correctly for both GVSP v1 and v2.
+                        if (length > GvspInfo.TimeStampIndex + 7)
+                        {
+                            currentFrameTimestamp =
+                                ((ulong)singlePacket[GvspInfo.TimeStampIndex] << 56) |
+                                ((ulong)singlePacket[GvspInfo.TimeStampIndex + 1] << 48) |
+                                ((ulong)singlePacket[GvspInfo.TimeStampIndex + 2] << 40) |
+                                ((ulong)singlePacket[GvspInfo.TimeStampIndex + 3] << 32) |
+                                ((ulong)singlePacket[GvspInfo.TimeStampIndex + 4] << 24) |
+                                ((ulong)singlePacket[GvspInfo.TimeStampIndex + 5] << 16) |
+                                ((ulong)singlePacket[GvspInfo.TimeStampIndex + 6] << 8) |
+                                 (ulong)singlePacket[GvspInfo.TimeStampIndex + 7];
+                        }
+                        continue;
+                    }
                     if (IsDataPacket(singlePacket[4])) //Packet
                     {
                         if (skipUntilNextFrameBoundary)
@@ -269,6 +295,7 @@ namespace GigeVision.Core.Services
                         {
                             ++frameCounter;
                             FrameReady?.Invoke(imageID, buffer[bufferIndexClone]);
+                            FrameReadyWithInfo?.Invoke(this, new GvspFrameInfo(imageID, currentFrameTimestamp));
                         }
                         else
                         {
@@ -295,6 +322,11 @@ namespace GigeVision.Core.Services
                 }
                 IsReceiving = false;
             }
+        }
+
+        private static bool IsLeaderPacket(byte packetHeaderType)
+        {
+            return (packetHeaderType & 0x0F) == GvspLeaderPacketType;
         }
 
         private static bool IsDataPacket(byte packetHeaderType)

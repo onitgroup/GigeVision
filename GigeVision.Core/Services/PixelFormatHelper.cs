@@ -1,4 +1,5 @@
 using System;
+using GigeVision.Core.Enums;
 
 namespace GigeVision.Core.Services
 {
@@ -31,8 +32,36 @@ namespace GigeVision.Core.Services
             return (int)DivideRoundUp(totalBits, 8);
         }
 
+        /// <summary>
+        /// Returns true when the pixel format carries a Bayer CFA pattern.
+        /// Checks the <see cref="PixelFormatRegistry"/> first so that vendor-specific
+        /// Bayer formats (e.g. Lucid QOI_BayerRG8) are recognised correctly.
+        /// Falls back to testing whether the standard PFNC enum name contains "Bayer".
+        /// </summary>
+        public static bool IsBayerFormat(uint pixelFormat)
+        {
+            if (PixelFormatRegistry.TryGet(pixelFormat, out var info))
+            {
+                return info.IsBayer;
+            }
+
+            if (Enum.IsDefined(typeof(PixelFormat), (int)pixelFormat))
+            {
+                return ((PixelFormat)pixelFormat).ToString().Contains("Bayer");
+            }
+
+            return false;
+        }
+
         private static int GetEffectiveBitsPerPixel(uint pixelFormat)
         {
+            // Registry entries take precedence — useful for compressed formats where
+            // the PFNC bits-per-pixel field does not reflect worst-case buffer requirements.
+            if (PixelFormatRegistry.TryGet(pixelFormat, out var info))
+            {
+                return info.EffectiveBitsPerPixel > 0 ? info.EffectiveBitsPerPixel : 8;
+            }
+
             int effectiveBits = (int)((pixelFormat >> 16) & 0xFF);
             return effectiveBits > 0 ? effectiveBits : 8;
         }

@@ -72,6 +72,12 @@ namespace GigeVision.Core.Services
         public EventHandler<byte[]> FrameReady { get; set; }
 
         /// <summary>
+        /// Fired alongside <see cref="FrameReady"/> with per-frame metadata
+        /// (hardware timestamp and frame ID) from the GVSP image leader.
+        /// </summary>
+        public EventHandler<GvspFrameInfo> FrameReadyWithInfo { get; set; }
+
+        /// <summary>
         /// GVCP controller
         /// </summary>
         public IGvcp Gvcp { get; private set; }
@@ -1128,7 +1134,7 @@ namespace GigeVision.Core.Services
                 Array.Clear(rawBytes, 0, rawBytes.Length);
             }
 
-            if (!IsRawFrame && PixelFormat.ToString().Contains("Bayer"))
+            if (!IsRawFrame && PixelFormatHelper.IsBayerFormat((uint)PixelFormat))
             {
                 rawBytes = new byte[Width * Height * 3];
             }
@@ -1170,6 +1176,7 @@ namespace GigeVision.Core.Services
             StreamReceiver.MissingPacketTolerance = MissingPacketTolerance;
             StreamReceiver.Updates = Updates;
             StreamReceiver.FrameReady = FrameReady;
+            StreamReceiver.FrameReadyWithInfo = FrameReadyWithInfo;
         }
 
         private void SetupRxThread()
