@@ -54,9 +54,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ItemGroup>
-      <ProjectReference Include="..\GenICam\GenICam.csproj" />
-    </ItemGroup>
+    <ProjectReference Include="..\GenICam\GenICam.csproj" />
   </ItemGroup>
 
 </Project>
