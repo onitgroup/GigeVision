@@ -50,12 +50,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="GenICam" Version="2.3.4-local.1" />
     <PackageReference Include="System.IO.Pipelines" Version="10.0.7" />
   </ItemGroup>
 
-  <!--<ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\GenICam\GenICam.csproj" />
-  </ItemGroup>-->
+  </ItemGroup>
 
 </Project>
