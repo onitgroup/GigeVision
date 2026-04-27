@@ -11,7 +11,6 @@
     <PackageTags>GigeVision, GeniCam, GVSP, GVCP</PackageTags>
     <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-    <Version>2.7.3</Version>
     <Version>2.7.6-local</Version>
     <PackageLicenseFile>License.txt</PackageLicenseFile>
     <PackageIcon>gige.png</PackageIcon>
@@ -50,12 +49,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="GenICam" Version="2.3.4-local.1" />
+    <!-- <PackageReference Include="GenICam" Version="2.3.4-local.1" /> -->
     <PackageReference Include="System.IO.Pipelines" Version="10.0.7" />
   </ItemGroup>
 
-  <!--<ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\GenICam\GenICam.csproj" />
-  </ItemGroup>-->
+  </ItemGroup>
 
 </Project>
