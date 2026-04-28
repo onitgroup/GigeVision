@@ -257,10 +257,18 @@ namespace GigeVision.Core.Services
                     }
                     if (IsDataEndPacket(singlePacket[4]))
                     {
+                        // Always read the per-frame actual packet count from the DataEnd packet.
+                        // For fixed-size uncompressed formats this equals GvspInfo.FinalPacketID; for
+                        // variable-length compressed formats (e.g. QOI_BayerRG8) it varies per frame
+                        // and must not be compared against the pre-calculated static value, which
+                        // assumes uncompressed size and would cause every compressed frame to be
+                        // discarded as "missing packets".
+                        int dataEndPacketID = (singlePacket[GvspInfo.PacketIDIndex] << 8) | singlePacket[GvspInfo.PacketIDIndex + 1];
+                        int thisFrameFinalPacketID = dataEndPacketID - 1;
+
                         if (GvspInfo.FinalPacketID == 0)
                         {
-                            packetID = (singlePacket[GvspInfo.PacketIDIndex] << 8) | singlePacket[GvspInfo.PacketIDIndex + 1];
-                            GvspInfo.FinalPacketID = packetID - 1;
+                            GvspInfo.FinalPacketID = thisFrameFinalPacketID;
                         }
 
                         blockID = singlePacket.Slice(GvspInfo.BlockIDIndex, GvspInfo.BlockIDLength).ToArray();
@@ -290,7 +298,7 @@ namespace GigeVision.Core.Services
                         }
 
                         //Checking if we receive all packets
-                        int packetCountDelta = packetRxCountClone - GvspInfo.FinalPacketID;
+                        int packetCountDelta = packetRxCountClone - thisFrameFinalPacketID;
                         if (Math.Abs(packetCountDelta) <= MissingPacketTolerance)
                         {
                             ++frameCounter;
